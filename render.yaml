@@ -8,5 +8,5 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
-      - key: BOT_TOKEN
+      - key: 8423595544:AAFhSJ1sXTpsNGHwr--Lqm5lD5rwXOVewOM
         sync: false
