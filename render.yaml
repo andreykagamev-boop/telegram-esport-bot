@@ -2,11 +2,10 @@ services:
   - type: web
     name: telegram-esport-bot
     env: python
+    pythonVersion: 3.11.9
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.9
-      - key: 8423595544:AAFhSJ1sXTpsNGHwr--Lqm5lD5rwXOVewOM
+      - key: BOT_TOKEN
         sync: false
