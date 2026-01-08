@@ -8,12 +8,16 @@ import os
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=os.getenv("BOT_TOKEN"))
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# --- База ---
 conn = sqlite3.connect("bot.db")
 cursor = conn.cursor()
 cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
@@ -69,7 +73,21 @@ async def callbacks(call: types.CallbackQuery):
 
     await call.answer()
 
+# ---- WEB SERVER (чтобы Render был доволен) ----
+async def handle(request):
+    return web.Response(text="Bot is running")
+
 async def main():
+    app = web.Application()
+    app.router.add_get("/", handle)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
