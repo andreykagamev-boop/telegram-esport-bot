@@ -67,6 +67,7 @@ async def handle_menu(message):
         await message.answer("Главное меню:", reply_markup=main_keyboard)
 
 async def main():
+    await asyncio.sleep(10)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
