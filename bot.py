@@ -1,14 +1,17 @@
 import asyncio
 import logging
 import os
+from datetime import datetime
 
+import aiohttp
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+PANDASCORE_TOKEN = os.getenv("PANDASCORE_TOKEN")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -32,14 +35,30 @@ game_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+# --- API ---
+
+async def get_cs2_today_matches():
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    url = "https://api.pandascore.co/csgo/matches"
+    headers = {
+        "Authorization": f"Bearer {PANDASCORE_TOKEN}"
+    }
+    params = {
+        "filter[begin_at]": today,
+        "sort": "begin_at"
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers, params=params) as resp:
+            if resp.status != 200:
+                return None
+            return await resp.json()
+
 # --- ХЭНДЛЕРЫ ---
 
 @dp.message(Command("start"))
 async def start(message):
-    await message.answer(
-        "Привет! Выбери игру 👇",
-        reply_markup=main_keyboard
-    )
+    await message.answer("Привет! Выбери игру 👇", reply_markup=main_keyboard)
 
 @dp.message()
 async def handle_menu(message):
@@ -48,26 +67,35 @@ async def handle_menu(message):
     if text == "🎮 CS2":
         await message.answer("CS2 — выбери раздел:", reply_markup=game_keyboard)
 
-    elif text == "🛡 Dota 2":
-        await message.answer("Dota 2 — выбери раздел:", reply_markup=game_keyboard)
-
-    elif text == "📊 Аналитика":
-        await message.answer("Общая аналитика появится позже 📈")
-
     elif text == "📅 Сегодня":
-        await message.answer("Матчи на сегодня (скоро подключим данные)")
+        await message.answer("Загружаю матчи CS2 на сегодня ⏳")
+        matches = await get_cs2_today_matches()
 
-    elif text == "⏭ Завтра":
-        await message.answer("Матчи на завтра (скоро подключим данные)")
+        if not matches:
+            await message.answer("Не удалось получить матчи 😕")
+            return
 
-    elif text == "🔴 Live":
-        await message.answer("Live матчи (в разработке)")
+        if len(matches) == 0:
+            await message.answer("Сегодня матчей CS2 нет")
+            return
+
+        for match in matches[:5]:
+            team1 = match["opponents"][0]["opponent"]["name"] if match["opponents"] else "TBD"
+            team2 = match["opponents"][1]["opponent"]["name"] if len(match["opponents"]) > 1 else "TBD"
+            time = match["begin_at"]
+            tournament = match["tournament"]["name"]
+
+            text = (
+                f"🎮 {team1} vs {team2}\n"
+                f"🕒 {time}\n"
+                f"🏆 {tournament}"
+            )
+            await message.answer(text)
 
     elif text == "🔙 Назад":
         await message.answer("Главное меню:", reply_markup=main_keyboard)
 
 async def main():
-    await asyncio.sleep(10)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
