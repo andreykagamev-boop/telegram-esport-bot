@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: telegram-esport-bot
+    name: telegram-test-bot
     env: python
     plan: free
     buildCommand: pip install --break-system-packages -r requirements.txt
