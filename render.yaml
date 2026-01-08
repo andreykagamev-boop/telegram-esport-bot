@@ -3,7 +3,7 @@ services:
     name: telegram-esport-bot
     env: python
     plan: free
-    buildCommand: python3.11 -m pip install -r requirements.txt
+    buildCommand: python3.11 -m pip install --break-system-packages -r requirements.txt
     startCommand: python3.11 bot.py
     envVars:
       - key: BOT_TOKEN
