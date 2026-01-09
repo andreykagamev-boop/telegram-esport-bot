@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta
-from collections import defaultdict
 
 import aiohttp
 from aiohttp import web
@@ -18,7 +17,6 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # ---------- ХРАНИЛИЩЕ ----------
-
 user_game = {}
 cache_matches = {}   # key: game -> {"data": [], "ts": datetime}
 cache_analytics = {} # key: match_id -> {"text": str, "ts": datetime}
@@ -26,22 +24,24 @@ cache_analytics = {} # key: match_id -> {"text": str, "ts": datetime}
 CACHE_TTL = 300  # 5 минут
 
 # ---------- КЛАВИАТУРЫ ----------
-
 main_kb = types.ReplyKeyboardMarkup(
-    keyboard=[[types.KeyboardButton("🎮 CS2"), types.KeyboardButton("🛡 Dota 2")]],
+    keyboard=[[types.KeyboardButton(text="🎮 CS2"), types.KeyboardButton(text="🛡 Dota 2")]],
     resize_keyboard=True
 )
 
 game_kb = types.ReplyKeyboardMarkup(
     keyboard=[
-        [types.KeyboardButton("📅 Сегодня"), types.KeyboardButton("📊 Аналитика")],
-        [types.KeyboardButton("🔙 Назад")]
+        [
+            types.KeyboardButton(text="📅 Сегодня"), 
+            types.KeyboardButton(text="📊 Аналитика"),
+            types.KeyboardButton(text="📊 Экспресс")  # Новая кнопка
+        ],
+        [types.KeyboardButton(text="🔙 Назад")]
     ],
     resize_keyboard=True
 )
 
 # ---------- ВСПОМОГАТЕЛЬНЫЕ ----------
-
 def format_msk(utc_time: str) -> str:
     if not utc_time:
         return "TBD"
@@ -61,9 +61,7 @@ def form(team_id, matches):
     return " ".join("W" if m.get("winner", {}).get("id")==team_id else "L" for m in matches[:5])
 
 # ---------- API ----------
-
 async def fetch_matches(game):
-    # кеш
     now = datetime.utcnow()
     if game in cache_matches and (now - cache_matches[game]["ts"]).total_seconds() < CACHE_TTL:
         return cache_matches[game]["data"]
@@ -92,7 +90,6 @@ async def fetch_team_history(team_id, limit=10):
             return await r.json()
 
 # ---------- АНАЛИТИКА ----------
-
 async def build_analytics(match):
     match_id = match.get("id")
     now = datetime.utcnow()
@@ -103,7 +100,6 @@ async def build_analytics(match):
     h1 = await fetch_team_history(t1["id"])
     h2 = await fetch_team_history(t2["id"])
 
-    # H2H
     h2h_matches = [m for m in h1 if any(o["opponent"]["id"]==t2["id"] for o in m.get("opponents",[]))]
     h2h_score = sum(1 for m in h2h_matches if m.get("winner",{}).get("id")==t1["id"])
     h2h_text = f"{t1['name']} {h2h_score} — {len(h2h_matches)-h2h_score} {t2['name']}" if h2h_matches else "Нет данных"
@@ -125,7 +121,6 @@ async def build_analytics(match):
     return text
 
 # ---------- ХЭНДЛЕРЫ ----------
-
 @dp.message(Command("start"))
 async def start(msg):
     await msg.answer("Выбери игру 👇", reply_markup=main_kb)
@@ -163,7 +158,6 @@ async def handler(msg):
             await msg.answer("Нет матчей для анализа")
             return
 
-        # создаём inline кнопки
         buttons = [types.InlineKeyboardButton(
             text=f"{m['opponents'][0]['opponent']['name']} vs {m['opponents'][1]['opponent']['name']}", 
             callback_data=f"analyze_{m['id']}"
@@ -172,18 +166,51 @@ async def handler(msg):
         kb.add(*buttons)
         await msg.answer("Выберите матч для аналитики:", reply_markup=kb)
 
+    elif text == "📊 Экспресс":
+        game = user_game.get(uid)
+        if not game:
+            await msg.answer("Сначала выбери игру")
+            return
+        matches = await fetch_matches(game)
+        if not matches:
+            await msg.answer("Нет матчей для экспресса")
+            return
+
+        express_text = f"🎮 Экспресс на сегодня\n\n"
+        for idx, match in enumerate(matches[:5], 1):
+            t1, t2 = match["opponents"][0]["opponent"], match["opponents"][1]["opponent"]
+            h1 = await fetch_team_history(t1["id"])
+            h2 = await fetch_team_history(t2["id"])
+
+            # Простая вероятность
+            wr1 = sum(1 for m in h1[:10] if m.get("winner",{}).get("id")==t1["id"])
+            wr2 = sum(1 for m in h2[:10] if m.get("winner",{}).get("id")==t2["id"])
+            wr_prob = wr1 / (wr1+wr2+0.001)
+
+            f1 = sum(1 for m in h1[:5] if m.get("winner",{}).get("id")==t1["id"])
+            f2 = sum(1 for m in h2[:5] if m.get("winner",{}).get("id")==t2["id"])
+            form_prob = f1 / (f1+f2+0.001)
+
+            h2h_matches = [m for m in h1 if any(o["opponent"]["id"]==t2["id"] for o in m.get("opponents",[]))]
+            h2h_wins = sum(1 for m in h2h_matches if m.get("winner",{}).get("id")==t1["id"])
+            h2h_prob = h2h_wins / (len(h2h_matches)+0.001) if h2h_matches else 0.5
+
+            prob = 0.5*wr_prob + 0.3*form_prob + 0.2*h2h_prob
+            winner = t1["name"] if prob>=0.5 else t2["name"]
+            express_text += f"{idx}️⃣ {t1['name']} vs {t2['name']} → {winner} ({prob*100:.0f}%)\n"
+
+        await msg.answer(express_text)
+
     elif text == "🔙 Назад":
         user_game.pop(uid, None)
         await msg.answer("Главное меню", reply_markup=main_kb)
 
 # ---------- CALLBACKS ----------
-
 @dp.callback_query()
 async def cb_handler(cb: types.CallbackQuery):
     data = cb.data
     if data.startswith("analyze_"):
         match_id = int(data.split("_")[1])
-        # ищем матч в кеше
         match = None
         for mlist in cache_matches.values():
             for m in mlist["data"]:
@@ -194,10 +221,9 @@ async def cb_handler(cb: types.CallbackQuery):
         await cb.message.answer("Собираю аналитику ⏳")
         text = await build_analytics(match)
         await cb.message.answer(text)
-        await cb.answer()  # чтобы кнопка перестала "крутить"
+        await cb.answer()
 
 # ---------- WEB ----------
-
 async def health(request):
     return web.Response(text="OK")
 
