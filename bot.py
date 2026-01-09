@@ -21,21 +21,20 @@ user_game = {}
 
 main_keyboard = types.ReplyKeyboardMarkup(
     keyboard=[
-        [types.KeyboardButton("🎮 CS2"), types.KeyboardButton("🛡 Dota 2")],
-        [types.KeyboardButton("📊 Аналитика"), types.KeyboardButton("🎯 Экспресс")]
+        [types.KeyboardButton(text="🎮 CS2"), types.KeyboardButton(text="🛡 Dota 2")],
+        [types.KeyboardButton(text="📊 Аналитика"), types.KeyboardButton(text="🎯 Экспресс")]
     ],
     resize_keyboard=True
 )
 
 game_keyboard = types.ReplyKeyboardMarkup(
     keyboard=[
-        [types.KeyboardButton("📅 Сегодня"), types.KeyboardButton("⏭ Завтра")],
-        [types.KeyboardButton("🔴 Live")],
-        [types.KeyboardButton("🔙 Назад")]
+        [types.KeyboardButton(text="📅 Сегодня"), types.KeyboardButton(text="⏭ Завтра")],
+        [types.KeyboardButton(text="🔴 Live")],
+        [types.KeyboardButton(text="🔙 Назад")]
     ],
     resize_keyboard=True
 )
-
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
 def format_msk_time(utc_time: str) -> str:
