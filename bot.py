@@ -219,28 +219,25 @@ async def handler(msg):
         await msg.answer("Главное меню", reply_markup=main_kb)
 
 # ---------- CALLBACKS ----------
-@dp.callback_query()
+@dp.callback_query(lambda c: c.data and c.data.startswith("analyze_"))
 async def cb_handler(cb: types.CallbackQuery):
-    data = cb.data
-    if data.startswith("analyze_"):
-        match_id = int(data.split("_")[1])
-        match = None
-        for matches in cache_matches.values():
-            for m in matches:
-                if m and m.get("id")==match_id:
-                    match = m
-                    break
-            if match: break
+    await cb.answer()  # обязательно для Telegram
+    match_id = int(cb.data.split("_")[1])
+    match = None
+    for matches in cache_matches.values():
+        for m in matches:
+            if m and m.get("id")==match_id:
+                match = m
+                break
+        if match: break
 
-        if not match:
-            await cb.message.answer("Не удалось найти матч")
-            await cb.answer()
-            return
+    if not match:
+        await cb.message.answer("Не удалось найти матч")
+        return
 
-        await cb.message.answer("Собираю аналитику ⏳")
-        text = await build_analytics(match)
-        await cb.message.answer(text)
-        await cb.answer()
+    await cb.message.answer("Собираю аналитику ⏳")
+    text = await build_analytics(match)
+    await cb.message.answer(text)
 
 # ---------- WEB ----------
 async def health(request):
