@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 
 import aiohttp
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+from aiogram.filters import Command, Text
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 logging.basicConfig(level=logging.INFO)
 
@@ -17,18 +18,18 @@ dp = Dispatcher()
 
 HEADERS = {"Authorization": f"Bearer {PANDASCORE_TOKEN}"}
 
+USER_GAMES = {}  # user_id -> "cs2" или "dota2"
 CACHE = {
-    "matches": {},
-    "teams": {},
-    "analytics": {}
+    "matches": {},  # game -> список матчей
+    "analytics": {},  # match_id -> текст аналитики
+    "notified": set()  # match_id для уведомлений
 }
 
-# ---------- КЛАВИАТУРЫ ----------
+# ----------------- КЛАВИАТУРЫ -----------------
 main_kb = types.ReplyKeyboardMarkup(
     keyboard=[
         [types.KeyboardButton(text="🎮 CS2"), types.KeyboardButton(text="🛡 Dota 2")],
-        [types.KeyboardButton(text="🔥 Экспресс")],
-        [types.KeyboardButton(text="🔴 Live-матчи")]
+        [types.KeyboardButton(text="🔥 Экспресс"), types.KeyboardButton(text="🔴 Live-матчи")]
     ],
     resize_keyboard=True
 )
@@ -41,13 +42,14 @@ game_kb = types.ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# ---------- API ----------
+# ----------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ -----------------
 async def fetch(url, params=None):
     async with aiohttp.ClientSession() as s:
         async with s.get(url, headers=HEADERS, params=params) as r:
             if r.status != 200:
                 return []
             return await r.json()
+
 
 async def get_matches(game, live=False):
     key = f"{game}_{'live' if live else 'today'}"
@@ -57,6 +59,7 @@ async def get_matches(game, live=False):
     today = datetime.utcnow().strftime("%Y-%m-%d")
     endpoint = "csgo" if game == "cs2" else "dota2"
     url = f"https://api.pandascore.co/{endpoint}/matches"
+
     params = {"filter[begin_at]": today, "sort": "begin_at", "per_page": 20}
     if live:
         params = {"filter[live]": True, "per_page": 10}
@@ -65,20 +68,36 @@ async def get_matches(game, live=False):
     CACHE["matches"][key] = matches
     return matches
 
-async def get_team_history(team_id, game):
-    key = f"{team_id}_{game}"
-    if key in CACHE["teams"]:
-        return CACHE["teams"][key]
 
+def format_time(utc_time):
+    if not utc_time:
+        return "TBD"
+    dt = datetime.fromisoformat(utc_time.replace("Z", ""))
+    dt += timedelta(hours=3)  # МСК
+    return dt.strftime("%H:%M")
+
+
+def format_match(match):
+    opponents = match.get("opponents", [])
+    if len(opponents) < 2:
+        return "TBD"
+    t1 = opponents[0]["opponent"]["name"]
+    t2 = opponents[1]["opponent"]["name"]
+    time = format_time(match.get("begin_at"))
+    tournament = match.get("tournament", {}).get("name", "Неизвестный турнир")
+    return f"🎮 {t1} vs {t2}\n🕒 {time} МСК\n🏆 {tournament}"
+
+
+# ----------------- АНАЛИТИКА -----------------
+async def get_team_history(team_id, game):
     endpoint = "csgo" if game == "cs2" else "dota2"
     url = f"https://api.pandascore.co/{endpoint}/matches"
     data = await fetch(url, {"filter[opponent_id]": team_id, "per_page": 10})
-    CACHE["teams"][key] = data
     return data
 
-# ---------- АНАЛИТИКА ----------
+
 def winrate(matches, team_id):
-    wins = total = 0
+    total = wins = 0
     for m in matches:
         if not m or not m.get("winner"):
             continue
@@ -86,6 +105,7 @@ def winrate(matches, team_id):
         if m["winner"]["id"] == team_id:
             wins += 1
     return round((wins / total) * 100, 1) if total else 0
+
 
 def form(matches, team_id):
     res = ""
@@ -95,8 +115,10 @@ def form(matches, team_id):
         res += "W" if m["winner"]["id"] == team_id else "L"
     return res or "N/A"
 
+
 def probability(wr1, wr2):
     return round((wr1 / (wr1 + wr2)) * 100) if wr1 + wr2 else 50
+
 
 async def analytics(match, game):
     mid = match["id"]
@@ -104,7 +126,6 @@ async def analytics(match, game):
         return CACHE["analytics"][mid]
 
     t1, t2 = match["opponents"][0]["opponent"], match["opponents"][1]["opponent"]
-
     h1 = await get_team_history(t1["id"], game)
     h2 = await get_team_history(t2["id"], game)
 
@@ -113,22 +134,24 @@ async def analytics(match, game):
     fav = t1["name"] if p1 > p2 else t2["name"]
 
     text = (
-        f"📊 АНАЛИТИКА МАТЧА\n\n"
+        f"📊 <b>АНАЛИТИКА МАТЧА</b>\n\n"
         f"🆚 {t1['name']} vs {t2['name']}\n\n"
         f"Вероятность победы:\n"
         f"🟢 {t1['name']} — {p1}%\n"
         f"🔴 {t2['name']} — {p2}%\n\n"
-        f"Форма:\n"
+        f"Форма последних матчей:\n"
         f"{t1['name']}: {form(h1, t1['id'])}\n"
         f"{t2['name']}: {form(h2, t2['id'])}\n\n"
-        f"Фаворит: ⭐ {fav}\n\n"
-        f"⚠️ Аналитика не гарантирует исход"
+        f"⭐ Фаворит: {fav}\n"
+        f"──────────────\n"
+        f"⚠️ Данные только для статистики, не гарантия исхода."
     )
 
     CACHE["analytics"][mid] = text
     return text
 
-# ---------- ЭКСПРЕСС ----------
+
+# ----------------- ЭКСПРЕСС -----------------
 async def express(game):
     matches = await get_matches(game)
     picks = []
@@ -145,76 +168,114 @@ async def express(game):
             break
     if not picks:
         return "❌ Нет матчей с достаточной уверенностью"
-    msg = "🔥 УМНЫЙ ЭКСПРЕСС\n\n"
+    msg = "🔥 <b>УМНЫЙ ЭКСПРЕСС</b>\n\n"
     for i, p in enumerate(picks, 1):
         msg += f"{i}️⃣ {p}\n"
-    msg += "\nРиск: 🟡 Средний\n\nОсновано на статистике"
+    msg += "\nРиск: 🟡 Средний\nОсновано на статистике"
     return msg
 
-# ---------- LIVE-матчи ----------
+
+# ----------------- LIVE -----------------
 async def live_matches(game):
     matches = await get_matches(game, live=True)
     if not matches:
         return "❌ Live матчей нет"
-    msg = "🔴 LIVE МАТЧИ:\n\n"
+    msg = "🔴 <b>LIVE МАТЧИ</b>\n\n"
     for m in matches[:5]:
         t1 = m["opponents"][0]["opponent"]["name"]
         t2 = m["opponents"][1]["opponent"]["name"]
-        time = m.get("begin_at","TBD")
+        time = format_time(m.get("begin_at"))
         msg += f"🆚 {t1} vs {t2}\n🕒 {time} МСК\n\n"
     return msg
 
-# ---------- ХЭНДЛЕРЫ ----------
+
+# ----------------- ХЭНДЛЕРЫ -----------------
 @dp.message(Command("start"))
 async def start(m: types.Message):
     await m.answer("Выбери игру 👇", reply_markup=main_kb)
 
-@dp.message(lambda m: m.text in ["🎮 CS2", "🛡 Dota 2"])
+
+@dp.message(Text(text=["🎮 CS2", "🛡 Dota 2"]))
 async def choose_game(m: types.Message):
-    m.bot_data["game"] = "cs2" if "CS2" in m.text else "dota2"
+    USER_GAMES[m.from_user.id] = "cs2" if "CS2" in m.text else "dota2"
     await m.answer("Выбери действие:", reply_markup=game_kb)
 
-@dp.message(lambda m: m.text == "📅 Сегодня")
+
+@dp.message(Text(text="📅 Сегодня"))
 async def today(m: types.Message):
-    game = m.bot_data.get("game", "cs2")
+    game = USER_GAMES.get(m.from_user.id, "cs2")
     matches = await get_matches(game)
-    for m_ in matches[:5]:
-        t1 = m_["opponents"][0]["opponent"]["name"]
-        t2 = m_["opponents"][1]["opponent"]["name"]
-        time = datetime.fromisoformat(m_["begin_at"].replace("Z","")) + timedelta(hours=3)
-        kb = types.InlineKeyboardMarkup(
-            inline_keyboard=[[types.InlineKeyboardButton(text="📊 Аналитика", callback_data=f"a_{m_['id']}")]]
+    if not matches:
+        await m.answer("❌ Сегодня матчей нет")
+        return
+    for match in matches[:5]:
+        text = format_match(match)
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="📊 Аналитика", callback_data=f"a_{match['id']}")]
+            ]
         )
-        await m.answer(f"🎮 {t1} vs {t2}\n🕒 {time:%H:%M} МСК", reply_markup=kb)
+        await m.answer(text, reply_markup=kb)
+
 
 @dp.callback_query(lambda c: c.data.startswith("a_"))
 async def cb_analytics(cb: types.CallbackQuery):
     await cb.answer()
     mid = int(cb.data.split("_")[1])
-    for game in ["cs2","dota2"]:
-        for m_ in CACHE["matches"].get(game, []):
-            if m_["id"] == mid:
-                await cb.message.answer(await analytics(m_, game))
-                return
+    game = "cs2"  # предполагаем CS2, можно добавить логику для Dota
+    for m_ in CACHE["matches"].get(game, []):
+        if m_["id"] == mid:
+            text = await analytics(m_, game)
+            await cb.message.answer(text, parse_mode="HTML")
+            return
 
-@dp.message(lambda m: m.text == "🔥 Экспресс")
+
+@dp.message(Text(text="🔥 Экспресс"))
 async def cb_express(m: types.Message):
-    game = m.bot_data.get("game","cs2")
+    game = USER_GAMES.get(m.from_user.id, "cs2")
     await m.answer("Собираю экспресс ⏳")
-    await m.answer(await express(game))
+    await m.answer(await express(game), parse_mode="HTML")
 
-@dp.message(lambda m: m.text == "🔴 Live-матчи")
+
+@dp.message(Text(text="🔴 Live-матчи"))
 async def cb_live(m: types.Message):
-    game = m.bot_data.get("game","cs2")
-    await m.answer(await live_matches(game))
+    game = USER_GAMES.get(m.from_user.id, "cs2")
+    await m.answer(await live_matches(game), parse_mode="HTML")
 
-@dp.message(lambda m: m.text == "🔙 Назад")
+
+@dp.message(Text(text="🔙 Назад"))
 async def cb_back(m: types.Message):
-    await m.answer("Главное меню", reply_markup=main_kb)
+    await m.answer("Главное меню:", reply_markup=main_kb)
 
-# ---------- RUN ----------
+
+# ----------------- УВЕДОМЛЕНИЯ -----------------
+async def notifier():
+    while True:
+        for game in ["cs2", "dota2"]:
+            matches = await get_matches(game)
+            for match in matches:
+                match_id = match["id"]
+                begin = match.get("begin_at")
+                if not begin or match_id in CACHE["notified"]:
+                    continue
+                begin_dt = datetime.fromisoformat(begin.replace("Z", "")) + timedelta(hours=3)
+                delta = (begin_dt - datetime.utcnow() - timedelta(hours=3)).total_seconds()
+                if 0 < delta <= 900:  # за 15 минут
+                    for user_id, g in USER_GAMES.items():
+                        if g == game:
+                            await bot.send_message(
+                                user_id,
+                                f"⏰ Матч начнется через 15 минут!\n{format_match(match)}"
+                            )
+                    CACHE["notified"].add(match_id)
+        await asyncio.sleep(300)  # каждые 5 минут проверяем
+
+
+# ----------------- RUN -----------------
 async def main():
+    asyncio.create_task(notifier())
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
