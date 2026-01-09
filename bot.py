@@ -1,7 +1,6 @@
 import os
 import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import aiohttp
@@ -15,17 +14,20 @@ dp = Dispatcher()
 user_game = {}
 
 # Кнопки выбора игры
-game_keyboard = InlineKeyboardMarkup(row_width=2)
-game_keyboard.add(
-    InlineKeyboardButton(text="🎮 CS2", callback_data="game_cs2"),
-    InlineKeyboardButton(text="🛡 Dota 2", callback_data="game_dota")
-)
+def game_selection_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        types.InlineKeyboardButton(text="🎮 CS2", callback_data="game_cs2"),
+        types.InlineKeyboardButton(text="🛡 Dota 2", callback_data="game_dota")
+    )
+    return kb.as_markup()
 
+# Главные кнопки после выбора игры
 def main_keyboard():
     kb = InlineKeyboardBuilder()
     kb.row(
-        InlineKeyboardButton(text="📊 Аналитика", callback_data="analytics"),
-        InlineKeyboardButton(text="🎯 Экспресс", callback_data="express")
+        types.InlineKeyboardButton(text="📊 Аналитика", callback_data="analytics"),
+        types.InlineKeyboardButton(text="🎯 Экспресс", callback_data="express")
     )
     return kb.as_markup()
 
@@ -49,7 +51,7 @@ async def fetch_team_matches(team_id, game, limit=5):
                 return []
             return await r.json()
 
-def format_match_card(match, game):
+def format_match_card(match):
     opp = match.get("opponents", [])
     t1 = opp[0]["opponent"]["name"] if len(opp) > 0 else "TBD"
     t2 = opp[1]["opponent"]["name"] if len(opp) > 1 else "TBD"
@@ -60,7 +62,7 @@ def format_match_card(match, game):
 
 @dp.message(Command("start"))
 async def start(msg: types.Message):
-    await msg.answer("Привет! Выбери игру:", reply_markup=game_keyboard)
+    await msg.answer("Привет! Выбери игру:", reply_markup=game_selection_keyboard())
 
 @dp.callback_query()
 async def callback_handler(query: types.CallbackQuery):
@@ -87,8 +89,10 @@ async def callback_handler(query: types.CallbackQuery):
             await query.message.answer("Нет матчей для аналитики 😕")
             await query.answer()
             return
+
         team = matches[0]["opponents"][0]["opponent"]
         past_matches = await fetch_team_matches(team["id"], game, limit=5)
+
         text = f"📊 <b>Аналитика: {team['name']}</b>\n────────────────\n"
         wins = 0
         for m in past_matches:
@@ -100,6 +104,7 @@ async def callback_handler(query: types.CallbackQuery):
                 wins += 1
             tournament = m.get("tournament", {}).get("name", "Неизвестный турнир")
             text += f"🆚 {opp_name} — {result}\n🏆 {tournament}\n"
+
         wr = int((wins / len(past_matches)) * 100) if past_matches else 0
         green_blocks = "🟩" * (wr // 10)
         red_blocks = "🟥" * (10 - (wr // 10))
@@ -116,7 +121,7 @@ async def callback_handler(query: types.CallbackQuery):
             return
         text_exp = "🎯 <b>Экспресс-прогноз на сегодня</b>\n────────────────\n"
         for idx, m in enumerate(matches[:5], 1):
-            card = format_match_card(m, game)
+            card = format_match_card(m)
             text_exp += f"{idx}️⃣ {card}\n"
         await query.message.answer(text_exp)
         await query.answer()
