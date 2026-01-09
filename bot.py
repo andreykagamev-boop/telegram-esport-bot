@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 import aiohttp
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.filters.text import Text
 
 logging.basicConfig(level=logging.INFO)
 
