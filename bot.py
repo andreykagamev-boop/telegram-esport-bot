@@ -81,11 +81,11 @@ async def fetch_matches(game):
             cache_matches[game] = {"data": data, "ts": now}
             return data
 
-async def fetch_team_history(team_id, limit=10):
+async def fetch_team_history(team_id, limit=5):
     headers = {"Authorization": f"Bearer {PANDASCORE_TOKEN}"}
-    params = {"filter[opponent_id]": team_id, "sort":"-begin_at","per_page":limit}
+    params = {"sort":"-begin_at","per_page":limit}
     async with aiohttp.ClientSession() as session:
-        async with session.get("https://api.pandascore.co/matches", headers=headers, params=params) as r:
+        async with session.get(f"https://api.pandascore.co/teams/{team_id}/matches", headers=headers, params=params) as r:
             if r.status != 200: return []
             return await r.json()
 
@@ -146,6 +146,7 @@ async def handler(msg):
             await msg.answer("Сегодня матчей нет")
             return
         for m in matches[:5]:
+            if len(m.get("opponents",[]))<2: continue
             t1, t2 = m["opponents"][0]["opponent"]["name"], m["opponents"][1]["opponent"]["name"]
             await msg.answer(f"{t1} vs {t2} ({format_msk(m.get('begin_at'))})")
     elif text == "📊 Аналитика":
@@ -158,10 +159,14 @@ async def handler(msg):
             await msg.answer("Нет матчей для анализа")
             return
 
-        buttons = [types.InlineKeyboardButton(
-            text=f"{m['opponents'][0]['opponent']['name']} vs {m['opponents'][1]['opponent']['name']}", 
-            callback_data=f"analyze_{m['id']}"
-        ) for m in matches[:5]]
+        buttons = []
+        for m in matches[:5]:
+            if len(m.get("opponents",[]))<2: continue
+            t1, t2 = m["opponents"][0]["opponent"]["name"], m["opponents"][1]["opponent"]["name"]
+            buttons.append(types.InlineKeyboardButton(
+                text=f"{t1} vs {t2}",
+                callback_data=f"analyze_{m['id']}"
+            ))
         kb = types.InlineKeyboardMarkup(row_width=1)
         kb.add(*buttons)
         await msg.answer("Выберите матч для аналитики:", reply_markup=kb)
@@ -178,17 +183,17 @@ async def handler(msg):
 
         express_text = f"🎮 Экспресс на сегодня\n\n"
         for idx, match in enumerate(matches[:5], 1):
+            if len(match.get("opponents", []))<2: continue
             t1, t2 = match["opponents"][0]["opponent"], match["opponents"][1]["opponent"]
             h1 = await fetch_team_history(t1["id"])
             h2 = await fetch_team_history(t2["id"])
 
-            # Простая вероятность
-            wr1 = sum(1 for m in h1[:10] if m.get("winner",{}).get("id")==t1["id"])
-            wr2 = sum(1 for m in h2[:10] if m.get("winner",{}).get("id")==t2["id"])
+            wr1 = sum(1 for m in h1 if m.get("winner",{}).get("id")==t1["id"])
+            wr2 = sum(1 for m in h2 if m.get("winner",{}).get("id")==t2["id"])
             wr_prob = wr1 / (wr1+wr2+0.001)
 
-            f1 = sum(1 for m in h1[:5] if m.get("winner",{}).get("id")==t1["id"])
-            f2 = sum(1 for m in h2[:5] if m.get("winner",{}).get("id")==t2["id"])
+            f1 = sum(1 for m in h1 if m.get("winner",{}).get("id")==t1["id"])
+            f2 = sum(1 for m in h2 if m.get("winner",{}).get("id")==t2["id"])
             form_prob = f1 / (f1+f2+0.001)
 
             h2h_matches = [m for m in h1 if any(o["opponent"]["id"]==t2["id"] for o in m.get("opponents",[]))]
@@ -212,12 +217,18 @@ async def cb_handler(cb: types.CallbackQuery):
     if data.startswith("analyze_"):
         match_id = int(data.split("_")[1])
         match = None
-        for mlist in cache_matches.values():
-            for m in mlist["data"]:
-                if m["id"]==match_id: match=m
+        for matches in cache_matches.values():
+            for m in matches:
+                if m["id"] == match_id:
+                    match = m
+                    break
+            if match: break
+
         if not match:
             await cb.message.answer("Не удалось найти матч")
+            await cb.answer()
             return
+
         await cb.message.answer("Собираю аналитику ⏳")
         text = await build_analytics(match)
         await cb.message.answer(text)
