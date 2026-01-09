@@ -3,129 +3,175 @@ import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from pandascore import PandaScore
+from datetime import datetime
 
-# ================== Environment ==================
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-PANDASCORE_TOKEN = os.environ.get("PANDASCORE_TOKEN")
+# ====== Environment ======
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+PANDASCORE_TOKEN = os.getenv("PANDASCORE_TOKEN")
+
+if not BOT_TOKEN or not PANDASCORE_TOKEN:
+    raise RuntimeError("Нужно задать BOT_TOKEN и PANDASCORE_TOKEN в environment!")
 
 bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
-dp = Dispatcher()
+dp = Dispatcher(bot)
 
-ps = PandaScore(token=PANDASCORE_TOKEN)
+# ====== Библиотека Pandascore ======
+ps = PandaScore(PANDASCORE_TOKEN)
 
-# ================== Клавиатура ==================
+# ====== Клавиатура ======
 main_kb = ReplyKeyboardMarkup(resize_keyboard=True)
-main_kb.add(KeyboardButton("Предстоящие матчи"))
-main_kb.add(KeyboardButton("Прошедшие матчи"))
-main_kb.add(KeyboardButton("Live счёт"))
-main_kb.add(KeyboardButton("Прогноз победы"))
-main_kb.add(KeyboardButton("Экспресс"))
+main_kb.add(KeyboardButton("📅 Предстоящие"))
+main_kb.add(KeyboardButton("✅ Прошедшие"))
+main_kb.add(KeyboardButton("🔥 Live"))
+main_kb.add(KeyboardButton("🔮 Прогноз"))
+main_kb.add(KeyboardButton("🎲 Экспресс"))
 
-# ================== Хендлеры ==================
+# ====== Хендлеры ======
+
 @dp.message(commands=["start"])
-async def start(msg: types.Message):
-    await msg.answer("Привет! Я бот по киберспорту. Выберите действие:", reply_markup=main_kb)
+async def cmd_start(message: types.Message):
+    await message.answer("Привет! Я бот аналитики CS2 и Dota2 👇", reply_markup=main_kb)
 
 @dp.message()
-async def main_menu(msg: types.Message):
-    if msg.text == "Предстоящие матчи":
-        await upcoming_matches(msg)
-    elif msg.text == "Прошедшие матчи":
-        await past_matches(msg)
-    elif msg.text == "Live счёт":
-        await live_score(msg)
-    elif msg.text == "Прогноз победы":
-        await match_forecast(msg)
-    elif msg.text == "Экспресс":
-        await express_forecast(msg)
+async def main_handler(message: types.Message):
+    text = message.text.strip()
 
-# ================== Функции ==================
-async def upcoming_matches(msg):
-    cs2_matches = ps.get_matches(game="cs2", status="upcoming")[:5]
-    dota2_matches = ps.get_matches(game="dota2", status="upcoming")[:5]
+    if text == "📅 Предстоящие":
+        await send_upcoming(message)
+    elif text == "✅ Прошедшие":
+        await send_finished(message)
+    elif text == "🔥 Live":
+        await send_live(message)
+    elif text == "🔮 Прогноз":
+        await send_forecast(message)
+    elif text == "🎲 Экспресс":
+        await send_express(message)
+    else:
+        await message.answer("Нажми одну из кнопок ниже 👇", reply_markup=main_kb)
 
-    text = "<b>Предстоящие матчи CS2:</b>\n"
-    for m in cs2_matches:
-        text += f"{m['opponents'][0]['opponent']['name']} vs {m['opponents'][1]['opponent']['name']}\n"
-        text += f"Начало: {m['scheduled_at']}\n\n"
+# ====== Функции ======
 
-    text += "<b>Предстоящие матчи Dota2:</b>\n"
-    for m in dota2_matches:
-        text += f"{m['opponents'][0]['opponent']['name']} vs {m['opponents'][1]['opponent']['name']}\n"
-        text += f"Начало: {m['scheduled_at']}\n\n"
+async def send_upcoming(message: types.Message):
+    cs2 = ps.matches(videogame_slug="cs2", filter={"status":"running,not_started"}, sort="begin_at")
+    dota2 = ps.matches(videogame_slug="dota2", filter={"status":"running,not_started"}, sort="begin_at")
 
-    await msg.answer(text)
+    text = "<b>📅 Предстоящие матчи CS2:</b>\n"
+    for m in cs2[:5]:
+        dt = m.get("begin_at")
+        when = datetime.fromisoformat(dt.replace("Z","")).strftime("%d.%m %H:%M") if dt else "—"
+        t1 = m["opponents"][0]["opponent"]["name"]
+        t2 = m["opponents"][1]["opponent"]["name"]
+        text += f"{when} — {t1} vs {t2}\n"
 
-async def past_matches(msg):
-    cs2_matches = ps.get_matches(game="cs2", status="finished")[:5]
-    dota2_matches = ps.get_matches(game="dota2", status="finished")[:5]
+    text += "\n<b>📅 Предстоящие матчи Dota2:</b>\n"
+    for m in dota2[:5]:
+        dt = m.get("begin_at")
+        when = datetime.fromisoformat(dt.replace("Z","")).strftime("%d.%m %H:%M") if dt else "—"
+        t1 = m["opponents"][0]["opponent"]["name"]
+        t2 = m["opponents"][1]["opponent"]["name"]
+        text += f"{when} — {t1} vs {t2}\n"
 
-    text = "<b>Прошедшие матчи CS2:</b>\n"
-    for m in cs2_matches:
-        score = m.get("results", [])
-        score_str = " | ".join([f"{r['score']} : {r['opponent']['name']}" for r in score]) if score else "Нет данных"
-        text += f"{m['opponents'][0]['opponent']['name']} vs {m['opponents'][1]['opponent']['name']}\nСчёт: {score_str}\n\n"
+    await message.answer(text)
 
-    text += "<b>Прошедшие матчи Dota2:</b>\n"
-    for m in dota2_matches:
-        score = m.get("results", [])
-        score_str = " | ".join([f"{r['score']} : {r['opponent']['name']}" for r in score]) if score else "Нет данных"
-        text += f"{m['opponents'][0]['opponent']['name']} vs {m['opponents'][1]['opponent']['name']}\nСчёт: {score_str}\n\n"
+async def send_finished(message: types.Message):
+    cs2 = ps.matches(videogame_slug="cs2", filter={"status":"finished"}, sort="-begin_at")
+    dota2 = ps.matches(videogame_slug="dota2", filter={"status":"finished"}, sort="-begin_at")
 
-    await msg.answer(text)
+    text = "<b>✅ Завершённые CS2:</b>\n"
+    for m in cs2[:5]:
+        t1 = m["opponents"][0]["opponent"]["name"]
+        t2 = m["opponents"][1]["opponent"]["name"]
+        r = m.get("results") or []
+        if len(r)>=2:
+            s1,s2 = r[0]["score"], r[1]["score"]
+            text += f"{t1} {s1}-{s2} {t2}\n"
+        else:
+            text += f"{t1} vs {t2}\n"
 
-async def live_score(msg):
-    live_cs2 = ps.get_matches(game="cs2", status="running")[:5]
-    live_dota2 = ps.get_matches(game="dota2", status="running")[:5]
+    text += "\n<b>✅ Завершённые Dota2:</b>\n"
+    for m in dota2[:5]:
+        t1 = m["opponents"][0]["opponent"]["name"]
+        t2 = m["opponents"][1]["opponent"]["name"]
+        r = m.get("results") or []
+        if len(r)>=2:
+            s1,s2 = r[0]["score"], r[1]["score"]
+            text += f"{t1} {s1}-{s2} {t2}\n"
+        else:
+            text += f"{t1} vs {t2}\n"
 
-    text = "<b>Live CS2:</b>\n"
-    for m in live_cs2:
-        score = m.get("results", [])
-        score_str = " | ".join([f"{r['score']} : {r['opponent']['name']}" for r in score]) if score else "Нет данных"
-        text += f"{m['opponents'][0]['opponent']['name']} vs {m['opponents'][1]['opponent']['name']}\nСчёт: {score_str}\n\n"
+    await message.answer(text)
 
-    text += "<b>Live Dota2:</b>\n"
-    for m in live_dota2:
-        score = m.get("results", [])
-        score_str = " | ".join([f"{r['score']} : {r['opponent']['name']}" for r in score]) if score else "Нет данных"
-        # Pick/ban герои
-        picks = m.get("picks_bans", [])
-        picks_str = ""
-        if picks:
-            for pb in picks:
-                picks_str += f"{pb['team']['name']} {'пикнул' if pb['pick'] else 'забанил'} {pb['hero']['name']}\n"
-        text += f"{m['opponents'][0]['opponent']['name']} vs {m['opponents'][1]['opponent']['name']}\nСчёт: {score_str}\n{picks_str}\n"
+async def send_live(message: types.Message):
+    cs2 = ps.matches(videogame_slug="cs2", filter={"live":"true"})
+    dota2 = ps.matches(videogame_slug="dota2", filter={"live":"true"})
 
-    await msg.answer(text)
+    text = "<b>🔥 Live CS2:</b>\n"
+    for m in cs2:
+        t1 = m["opponents"][0]["opponent"]["name"]
+        t2 = m["opponents"][1]["opponent"]["name"]
+        r = m.get("results") or []
+        if len(r)>=2:
+            s1,s2 = r[0]["score"], r[1]["score"]
+            text += f"{t1} {s1}-{s2} {t2}\n"
+        else:
+            text += f"{t1} vs {t2}\n"
 
-async def match_forecast(msg):
-    # Пример аналитики с вероятностью победы
-    text = "<b>Прогноз победы:</b>\n"
-    cs2_matches = ps.get_matches(game="cs2", status="upcoming")[:3]
-    dota2_matches = ps.get_matches(game="dota2", status="upcoming")[:3]
+    text += "\n<b>🔥 Live Dota2:</b>\n"
+    for m in dota2:
+        t1 = m["opponents"][0]["opponent"]["name"]
+        t2 = m["opponents"][1]["opponent"]["name"]
+        r = m.get("results") or []
+        if len(r)>=2:
+            s1,s2 = r[0]["score"], r[1]["score"]
+            text += f"{t1} {s1}-{s2} {t2}\n"
+        else:
+            text += f"{t1} vs {t2}\n"
 
-    for m in cs2_matches:
-        team1, team2 = m['opponents'][0]['opponent']['name'], m['opponents'][1]['opponent']['name']
-        text += f"CS2: {team1} 60% vs {team2} 40%\n"
+    await message.answer(text)
 
-    for m in dota2_matches:
-        team1, team2 = m['opponents'][0]['opponent']['name'], m['opponents'][1]['opponent']['name']
-        text += f"Dota2: {team1} 55% vs {team2} 45%\n"
+def simple_predict(m):
+    # базовый прогноз: если есть odds
+    o1 = m["opponents"][0].get("winner_odds")
+    o2 = m["opponents"][1].get("winner_odds")
+    if o1 and o2:
+        return f"{m['opponents'][0]['opponent']['name']} {int(o1*100)}% : {int(o2*100)}% {m['opponents'][1]['opponent']['name']}"
+    # иначе равный прогноз
+    t1 = m["opponents"][0]["opponent"]["name"]
+    t2 = m["opponents"][1]["opponent"]["name"]
+    return f"{t1} ~50% : ~50% {t2}"
 
-    await msg.answer(text)
+async def send_forecast(message: types.Message):
+    cs2 = ps.matches(videogame_slug="cs2", filter={"status":"not_started"}, sort="begin_at")[:5]
+    dota2 = ps.matches(videogame_slug="dota2", filter={"status":"not_started"}, sort="begin_at")[:5]
 
-async def express_forecast(msg):
-    text = "<b>Экспресс:</b>\n"
-    cs2_matches = ps.get_matches(game="cs2", status="upcoming")[:3]
-    dota2_matches = ps.get_matches(game="dota2", status="upcoming")[:3]
+    text = "<b>🔮 Прогноз победы — CS2:</b>\n"
+    for m in cs2:
+        t1 = m["opponents"][0]["opponent"]["name"]
+        t2 = m["opponents"][1]["opponent"]["name"]
+        text += f"{t1} vs {t2} — {simple_predict(m)}\n"
 
-    for m in cs2_matches:
-        text += f"CS2: {m['opponents'][0]['opponent']['name']} победит\n"
-    for m in dota2_matches:
-        text += f"Dota2: {m['opponents'][0]['opponent']['name']} победит\n"
+    text += "\n<b>🔮 Прогноз победы — Dota2:</b>\n"
+    for m in dota2:
+        t1 = m["opponents"][0]["opponent"]["name"]
+        t2 = m["opponents"][1]["opponent"]["name"]
+        text += f"{t1} vs {t2} — {simple_predict(m)}\n"
 
-    await msg.answer(text)
+    await message.answer(text)
 
-# ================== Запуск ==================
-if __name__ == "__main__":
-    asyncio.run(dp.start_polling(bot))
+async def send_express(message: types.Message):
+    cs2 = ps.matches(videogame_slug="cs2", filter={"status":"not_started"}, sort="begin_at")[:3]
+    dota2 = ps.matches(videogame_slug="dota2", filter={"status":"not_started"}, sort="begin_at")[:3]
+
+    text = "<b>🎲 Экспресс-прогноз — CS2:</b>\n"
+    for m in cs2:
+        t1 = m["opponents"][0]["opponent"]["name"]
+        t2 = m["opponents"][1]["opponent"]["name"]
+        text += f"{t1} vs {t2} — {simple_predict(m)}\n"
+
+    text += "\n<b>🎲 Экспресс-прогноз — Dota2:</b>\n"
+    for m in dota2:
+        t1 = m["opponents"][0]["opponent"]["name"]
+        t2 = m["opponents"][1]["opponent"]["name"]
+        text += f"{t1} vs {t2} — {simple_predict(m)}\n"
+
+    await message.answer(text)
