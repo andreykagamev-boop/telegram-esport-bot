@@ -12,32 +12,31 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PANDASCORE_TOKEN = os.getenv("PANDASCORE_TOKEN")
 
-bot = Bot(BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 HEADERS = {"Authorization": f"Bearer {PANDASCORE_TOKEN}"}
 
 CACHE = {
-    "matches": {},       # ключ: game, value: список матчей
-    "teams": {},         # ключ: team_id_game, value: последние 10 матчей
-    "analytics": {},     # ключ: match_id, value: текст аналитики
-    "notifications": {}  # ключ: user_id, value: список match_id для уведомлений
+    "matches": {},
+    "teams": {},
+    "analytics": {}
 }
 
 # ---------- КЛАВИАТУРЫ ----------
 main_kb = types.ReplyKeyboardMarkup(
     keyboard=[
-        [types.KeyboardButton("🎮 CS2"), types.KeyboardButton("🛡 Dota 2")],
-        [types.KeyboardButton("🔥 Экспресс")],
-        [types.KeyboardButton("🔴 Live-матчи")]
+        [types.KeyboardButton(text="🎮 CS2"), types.KeyboardButton(text="🛡 Dota 2")],
+        [types.KeyboardButton(text="🔥 Экспресс")],
+        [types.KeyboardButton(text="🔴 Live-матчи")]
     ],
     resize_keyboard=True
 )
 
 game_kb = types.ReplyKeyboardMarkup(
     keyboard=[
-        [types.KeyboardButton("📅 Сегодня")],
-        [types.KeyboardButton("🔙 Назад")]
+        [types.KeyboardButton(text="📅 Сегодня")],
+        [types.KeyboardButton(text="🔙 Назад")]
     ],
     resize_keyboard=True
 )
@@ -51,7 +50,6 @@ async def fetch(url, params=None):
             return await r.json()
 
 async def get_matches(game, live=False):
-    """Получаем матчи: сегодня или live"""
     key = f"{game}_{'live' if live else 'today'}"
     if key in CACHE["matches"]:
         return CACHE["matches"][key]
@@ -124,10 +122,6 @@ async def analytics(match, game):
         f"{t1['name']}: {form(h1, t1['id'])}\n"
         f"{t2['name']}: {form(h2, t2['id'])}\n\n"
         f"Фаворит: ⭐ {fav}\n\n"
-        f"Почему:\n"
-        f"• Винрейт и серия побед\n"
-        f"• Текущая форма\n"
-        f"• Стабильность состава\n\n"
         f"⚠️ Аналитика не гарантирует исход"
     )
 
@@ -166,7 +160,8 @@ async def live_matches(game):
     for m in matches[:5]:
         t1 = m["opponents"][0]["opponent"]["name"]
         t2 = m["opponents"][1]["opponent"]["name"]
-        msg += f"🆚 {t1} vs {t2}\n🕒 {m.get('begin_at','')} МСК\n\n"
+        time = m.get("begin_at","TBD")
+        msg += f"🆚 {t1} vs {t2}\n🕒 {time} МСК\n\n"
     return msg
 
 # ---------- ХЭНДЛЕРЫ ----------
@@ -186,9 +181,9 @@ async def today(m: types.Message):
     for m_ in matches[:5]:
         t1 = m_["opponents"][0]["opponent"]["name"]
         t2 = m_["opponents"][1]["opponent"]["name"]
-        time = datetime.fromisoformat(m_["begin_at"].replace("Z", "")) + timedelta(hours=3)
+        time = datetime.fromisoformat(m_["begin_at"].replace("Z","")) + timedelta(hours=3)
         kb = types.InlineKeyboardMarkup(
-            inline_keyboard=[[types.InlineKeyboardButton("📊 Аналитика", callback_data=f"a_{m_['id']}")]]
+            inline_keyboard=[[types.InlineKeyboardButton(text="📊 Аналитика", callback_data=f"a_{m_['id']}")]]
         )
         await m.answer(f"🎮 {t1} vs {t2}\n🕒 {time:%H:%M} МСК", reply_markup=kb)
 
