@@ -1,0 +1,22 @@
+{
+  "matches": [
+    {
+      "id": 1,
+      "game": "cs2",
+      "team1": "Team Alpha",
+      "team2": "Team Beta",
+      "time": "2026-01-10 18:00",
+      "stats": "Win rate: 60% vs 55%, Last 5 matches: 3-2 vs 4-1",
+      "prediction": "Экспресс: победа Team Alpha с вероятностью 60%"
+    },
+    {
+      "id": 2,
+      "game": "dota2",
+      "team1": "Radiant",
+      "team2": "Dire",
+      "time": "2026-01-10 20:00",
+      "stats": "Win rate: 50% vs 65%, Last 5 matches: 2-3 vs 5-0",
+      "prediction": "Экспресс: победа Dire с вероятностью 65%"
+    }
+  ]
+}
