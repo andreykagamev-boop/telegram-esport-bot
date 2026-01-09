@@ -20,20 +20,21 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 user_game = {}
+user_matches_cache = {}
+waiting_for_match_choice = set()
 
 # ---------- КЛАВИАТУРЫ ----------
 
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🎮 CS2"), KeyboardButton(text="🛡 Dota 2")],
-        [KeyboardButton(text="📊 Аналитика")]
+        [KeyboardButton(text="🎮 CS2"), KeyboardButton(text="🛡 Dota 2")]
     ],
     resize_keyboard=True
 )
 
 game_keyboard = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📅 Сегодня")],
+        [KeyboardButton(text="📅 Сегодня"), KeyboardButton(text="📊 Аналитика")],
         [KeyboardButton(text="🔙 Назад")]
     ],
     resize_keyboard=True
@@ -47,43 +48,46 @@ def format_msk_time(utc_time: str) -> str:
     dt = datetime.fromisoformat(utc_time.replace("Z", ""))
     return (dt + timedelta(hours=3)).strftime("%H:%M")
 
-def format_match_text(game: str, match: dict) -> str:
-    opponents = match.get("opponents", [])
-    team1 = opponents[0]["opponent"]["name"] if len(opponents) > 0 else "TBD"
-    team2 = opponents[1]["opponent"]["name"] if len(opponents) > 1 else "TBD"
+def format_match_short(match: dict, idx: int) -> str:
+    opp = match.get("opponents", [])
+    t1 = opp[0]["opponent"]["name"] if len(opp) > 0 else "TBD"
+    t2 = opp[1]["opponent"]["name"] if len(opp) > 1 else "TBD"
+    time = format_msk_time(match.get("begin_at"))
+    return f"{idx}️⃣ {t1} vs {t2} ({time})"
 
-    time_msk = format_msk_time(match.get("begin_at"))
+def format_match_full(game: str, match: dict) -> str:
+    opp = match.get("opponents", [])
+    t1 = opp[0]["opponent"]["name"] if len(opp) > 0 else "TBD"
+    t2 = opp[1]["opponent"]["name"] if len(opp) > 1 else "TBD"
+    time = format_msk_time(match.get("begin_at"))
     tournament = match.get("tournament", {}).get("name", "Неизвестный турнир")
 
     return (
         f"🎮 {game.upper()}\n\n"
-        f"🆚 {team1} vs {team2}\n"
-        f"🕒 {time_msk} МСК\n"
-        f"🏆 {tournament}\n"
-        f"──────────────"
+        f"🆚 {t1} vs {t2}\n"
+        f"🕒 {time} МСК\n"
+        f"🏆 {tournament}"
     )
 
 # ---------- API ----------
 
 async def fetch_matches(game: str):
     today = datetime.utcnow().strftime("%Y-%m-%d")
-
-    url_map = {
+    url = {
         "cs2": "https://api.pandascore.co/csgo/matches",
         "dota2": "https://api.pandascore.co/dota2/matches"
-    }
+    }[game]
 
     headers = {"Authorization": f"Bearer {PANDASCORE_TOKEN}"}
     params = {"filter[begin_at]": today, "sort": "begin_at"}
 
     async with aiohttp.ClientSession() as session:
-        async with session.get(url_map[game], headers=headers, params=params) as resp:
-            if resp.status != 200:
+        async with session.get(url, headers=headers, params=params) as r:
+            if r.status != 200:
                 return []
-            return await resp.json()
+            return await r.json()
 
-async def fetch_team_recent_matches(team_id: int, limit: int = 10):
-    url = "https://api.pandascore.co/matches"
+async def fetch_team_history(team_id: int, limit: int = 10):
     headers = {"Authorization": f"Bearer {PANDASCORE_TOKEN}"}
     params = {
         "filter[opponent_id]": team_id,
@@ -92,132 +96,132 @@ async def fetch_team_recent_matches(team_id: int, limit: int = 10):
     }
 
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers, params=params) as resp:
-            if resp.status != 200:
+        async with session.get("https://api.pandascore.co/matches", headers=headers, params=params) as r:
+            if r.status != 200:
                 return []
-            return await resp.json()
+            return await r.json()
 
 # ---------- АНАЛИТИКА ----------
 
-def calculate_winrate(team_id: int, matches: list):
-    wins, total = 0, 0
-
+def winrate(team_id, matches):
+    wins = total = 0
     for m in matches:
-        winner = m.get("winner")
-        if winner:
+        w = m.get("winner")
+        if w:
             total += 1
-            if winner.get("id") == team_id:
+            if w.get("id") == team_id:
                 wins += 1
+    return f"{wins}/{total} ({wins/total*100:.1f}%)" if total else "Нет данных"
 
-    if total == 0:
-        return "Нет данных"
+def form(team_id, matches):
+    return " ".join(
+        "W" if m.get("winner", {}).get("id") == team_id else "L"
+        for m in matches[:5]
+    )
 
-    return f"{wins}/{total} ({wins / total * 100:.1f}%)"
+async def build_analytics(match):
+    t1, t2 = match["opponents"][0]["opponent"], match["opponents"][1]["opponent"]
 
-def build_form(team_id: int, matches: list):
-    form = []
-    for m in matches[:5]:
-        winner = m.get("winner")
-        form.append("W" if winner and winner.get("id") == team_id else "L")
-    return " ".join(form) if form else "–"
-
-async def build_analytics(match: dict):
-    opponents = match.get("opponents", [])
-    if len(opponents) < 2:
-        return "Недостаточно данных для аналитики ❌"
-
-    t1 = opponents[0]["opponent"]
-    t2 = opponents[1]["opponent"]
-
-    t1_history = await fetch_team_recent_matches(t1["id"])
-    t2_history = await fetch_team_recent_matches(t2["id"])
+    h1 = await fetch_team_history(t1["id"])
+    h2 = await fetch_team_history(t2["id"])
 
     return (
         f"📊 Аналитика матча\n\n"
         f"🆚 {t1['name']} vs {t2['name']}\n\n"
-        f"📈 Винрейт (10 матчей):\n"
-        f"{t1['name']}: {calculate_winrate(t1['id'], t1_history)}\n"
-        f"{t2['name']}: {calculate_winrate(t2['id'], t2_history)}\n\n"
-        f"🧠 Форма (5 матчей):\n"
-        f"{t1['name']}: {build_form(t1['id'], t1_history)}\n"
-        f"{t2['name']}: {build_form(t2['id'], t2_history)}\n\n"
-        f"⚠️ Аналитика носит информационный характер"
+        f"📈 Винрейт (10):\n"
+        f"{t1['name']}: {winrate(t1['id'], h1)}\n"
+        f"{t2['name']}: {winrate(t2['id'], h2)}\n\n"
+        f"🧠 Форма (5):\n"
+        f"{t1['name']}: {form(t1['id'], h1)}\n"
+        f"{t2['name']}: {form(t2['id'], h2)}\n\n"
+        f"⚠️ Информация носит аналитический характер"
     )
 
 # ---------- ХЭНДЛЕРЫ ----------
 
 @dp.message(Command("start"))
-async def start(message):
-    await message.answer("Привет! Выбери игру 👇", reply_markup=main_keyboard)
+async def start(msg):
+    await msg.answer("Выбери игру 👇", reply_markup=main_keyboard)
 
 @dp.message()
-async def menu(message):
-    text = message.text
-    user_id = message.from_user.id
+async def handler(msg):
+    uid = msg.from_user.id
+    text = msg.text.strip()
+
+    # выбор матча цифрой
+    if uid in waiting_for_match_choice and text.isdigit():
+        idx = int(text) - 1
+        matches = user_matches_cache.get(uid, [])
+        if 0 <= idx < len(matches):
+            waiting_for_match_choice.remove(uid)
+            await msg.answer("Собираю аналитику ⏳")
+            await msg.answer(await build_analytics(matches[idx]))
+        else:
+            await msg.answer("Неверный номер матча")
+        return
 
     if text == "🎮 CS2":
-        user_game[user_id] = "cs2"
-        await message.answer("CS2 выбран", reply_markup=game_keyboard)
+        user_game[uid] = "cs2"
+        await msg.answer("CS2 выбран", reply_markup=game_keyboard)
 
     elif text == "🛡 Dota 2":
-        user_game[user_id] = "dota2"
-        await message.answer("Dota 2 выбрана", reply_markup=game_keyboard)
+        user_game[uid] = "dota2"
+        await msg.answer("Dota 2 выбрана", reply_markup=game_keyboard)
 
     elif text == "📅 Сегодня":
-        game = user_game.get(user_id)
+        game = user_game.get(uid)
         if not game:
-            await message.answer("Сначала выбери игру 👆")
+            await msg.answer("Сначала выбери игру")
             return
 
-        await message.answer("Загружаю матчи ⏳")
         matches = await fetch_matches(game)
-
         if not matches:
-            await message.answer("Сегодня матчей нет 😕")
+            await msg.answer("Сегодня матчей нет")
             return
 
         for m in matches[:5]:
-            await message.answer(format_match_text(game, m))
+            await msg.answer(format_match_full(game, m))
 
     elif text == "📊 Аналитика":
-        game = user_game.get(user_id)
+        game = user_game.get(uid)
         if not game:
-            await message.answer("Сначала выбери игру 👆")
+            await msg.answer("Сначала выбери игру")
             return
 
-        await message.answer("Собираю аналитику ⏳")
         matches = await fetch_matches(game)
-
         if not matches:
-            await message.answer("Нет матчей для анализа 😕")
+            await msg.answer("Нет матчей для анализа")
             return
 
-        analytics = await build_analytics(matches[0])
-        await message.answer(analytics)
+        user_matches_cache[uid] = matches[:5]
+        waiting_for_match_choice.add(uid)
+
+        msg_text = "Выбери матч для аналитики:\n\n"
+        for i, m in enumerate(matches[:5], 1):
+            msg_text += format_match_short(m, i) + "\n"
+
+        await msg.answer(msg_text)
 
     elif text == "🔙 Назад":
-        user_game.pop(user_id, None)
-        await message.answer("Главное меню", reply_markup=main_keyboard)
+        user_game.pop(uid, None)
+        waiting_for_match_choice.discard(uid)
+        await msg.answer("Главное меню", reply_markup=main_keyboard)
 
-# ---------- WEB (Blue Tunes) ----------
+# ---------- WEB ----------
 
 async def health(request):
     return web.Response(text="OK")
 
-# ---------- ЗАПУСК ----------
-
 async def main():
     app = web.Application()
     app.router.add_get("/", health)
-
     runner = web.AppRunner(app)
     await runner.setup()
 
     port = int(os.getenv("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
+    await web.TCPSite(runner, "0.0.0.0", port).start()
 
-    logging.info(f"Web server started on port {port}")
+    logging.info("Bot started")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
