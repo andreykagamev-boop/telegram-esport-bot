@@ -34,7 +34,7 @@ game_kb = types.ReplyKeyboardMarkup(
         [
             types.KeyboardButton(text="📅 Сегодня"), 
             types.KeyboardButton(text="📊 Аналитика"),
-            types.KeyboardButton(text="📊 Экспресс")  # Новая кнопка
+            types.KeyboardButton(text="📊 Экспресс")
         ],
         [types.KeyboardButton(text="🔙 Назад")]
     ],
@@ -51,14 +51,13 @@ def format_msk(utc_time: str) -> str:
 def winrate(team_id, matches):
     wins=total=0
     for m in matches:
-        w = m.get("winner")
-        if w:
+        if m and m.get("winner"):
             total+=1
-            if w.get("id")==team_id: wins+=1
+            if m["winner"].get("id")==team_id: wins+=1
     return f"{wins}/{total} ({wins/total*100:.1f}%)" if total else "Нет данных"
 
 def form(team_id, matches):
-    return " ".join("W" if m.get("winner", {}).get("id")==team_id else "L" for m in matches[:5])
+    return " ".join("W" if m and m.get("winner") and m["winner"].get("id")==team_id else "L" for m in matches[:5])
 
 # ---------- API ----------
 async def fetch_matches(game):
@@ -96,12 +95,16 @@ async def build_analytics(match):
     if match_id in cache_analytics and (now - cache_analytics[match_id]["ts"]).total_seconds() < CACHE_TTL:
         return cache_analytics[match_id]["text"]
 
-    t1, t2 = match["opponents"][0]["opponent"], match["opponents"][1]["opponent"]
+    opponents = match.get("opponents")
+    if not opponents or len(opponents) < 2:
+        return "Недостаточно данных для аналитики"
+
+    t1, t2 = opponents[0]["opponent"], opponents[1]["opponent"]
     h1 = await fetch_team_history(t1["id"])
     h2 = await fetch_team_history(t2["id"])
 
-    h2h_matches = [m for m in h1 if any(o["opponent"]["id"]==t2["id"] for o in m.get("opponents",[]))]
-    h2h_score = sum(1 for m in h2h_matches if m.get("winner",{}).get("id")==t1["id"])
+    h2h_matches = [m for m in h1 if m and any(o["opponent"]["id"]==t2["id"] for o in m.get("opponents",[]))]
+    h2h_score = sum(1 for m in h2h_matches if m and m.get("winner") and m["winner"].get("id")==t1["id"])
     h2h_text = f"{t1['name']} {h2h_score} — {len(h2h_matches)-h2h_score} {t2['name']}" if h2h_matches else "Нет данных"
 
     text = (
@@ -146,9 +149,11 @@ async def handler(msg):
             await msg.answer("Сегодня матчей нет")
             return
         for m in matches[:5]:
-            if len(m.get("opponents",[]))<2: continue
-            t1, t2 = m["opponents"][0]["opponent"]["name"], m["opponents"][1]["opponent"]["name"]
+            opponents = m.get("opponents")
+            if not opponents or len(opponents)<2: continue
+            t1, t2 = opponents[0]["opponent"]["name"], opponents[1]["opponent"]["name"]
             await msg.answer(f"{t1} vs {t2} ({format_msk(m.get('begin_at'))})")
+
     elif text == "📊 Аналитика":
         game = user_game.get(uid)
         if not game:
@@ -161,8 +166,9 @@ async def handler(msg):
 
         buttons = []
         for m in matches[:5]:
-            if len(m.get("opponents",[]))<2: continue
-            t1, t2 = m["opponents"][0]["opponent"]["name"], m["opponents"][1]["opponent"]["name"]
+            opponents = m.get("opponents")
+            if not opponents or len(opponents)<2: continue
+            t1, t2 = opponents[0]["opponent"]["name"], opponents[1]["opponent"]["name"]
             buttons.append(types.InlineKeyboardButton(
                 text=f"{t1} vs {t2}",
                 callback_data=f"analyze_{m['id']}"
@@ -182,22 +188,24 @@ async def handler(msg):
             return
 
         express_text = f"🎮 Экспресс на сегодня\n\n"
-        for idx, match in enumerate(matches[:5], 1):
-            if len(match.get("opponents", []))<2: continue
-            t1, t2 = match["opponents"][0]["opponent"], match["opponents"][1]["opponent"]
+        for idx, match in enumerate(matches[:5],1):
+            opponents = match.get("opponents")
+            if not opponents or len(opponents)<2: continue
+            t1, t2 = opponents[0]["opponent"], opponents[1]["opponent"]
+
             h1 = await fetch_team_history(t1["id"])
             h2 = await fetch_team_history(t2["id"])
 
-            wr1 = sum(1 for m in h1 if m.get("winner",{}).get("id")==t1["id"])
-            wr2 = sum(1 for m in h2 if m.get("winner",{}).get("id")==t2["id"])
+            wr1 = sum(1 for m in h1 if m and m.get("winner") and m["winner"].get("id")==t1["id"])
+            wr2 = sum(1 for m in h2 if m and m.get("winner") and m["winner"].get("id")==t2["id"])
             wr_prob = wr1 / (wr1+wr2+0.001)
 
-            f1 = sum(1 for m in h1 if m.get("winner",{}).get("id")==t1["id"])
-            f2 = sum(1 for m in h2 if m.get("winner",{}).get("id")==t2["id"])
+            f1 = sum(1 for m in h1[:5] if m and m.get("winner") and m["winner"].get("id")==t1["id"])
+            f2 = sum(1 for m in h2[:5] if m and m.get("winner") and m["winner"].get("id")==t2["id"])
             form_prob = f1 / (f1+f2+0.001)
 
-            h2h_matches = [m for m in h1 if any(o["opponent"]["id"]==t2["id"] for o in m.get("opponents",[]))]
-            h2h_wins = sum(1 for m in h2h_matches if m.get("winner",{}).get("id")==t1["id"])
+            h2h_matches = [m for m in h1 if m and any(o["opponent"]["id"]==t2["id"] for o in m.get("opponents",[]))]
+            h2h_wins = sum(1 for m in h2h_matches if m and m.get("winner") and m["winner"].get("id")==t1["id"])
             h2h_prob = h2h_wins / (len(h2h_matches)+0.001) if h2h_matches else 0.5
 
             prob = 0.5*wr_prob + 0.3*form_prob + 0.2*h2h_prob
@@ -219,7 +227,7 @@ async def cb_handler(cb: types.CallbackQuery):
         match = None
         for matches in cache_matches.values():
             for m in matches:
-                if m["id"] == match_id:
+                if m and m.get("id")==match_id:
                     match = m
                     break
             if match: break
