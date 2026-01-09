@@ -1,19 +1,31 @@
 import os
 import asyncio
 import aiohttp
-from datetime import datetime
-
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiohttp import web
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PANDASCORE_TOKEN = os.getenv("PANDASCORE_TOKEN")
+PORT = int(os.getenv("PORT", 10000))
 
 bot = Bot(BOT_TOKEN, parse_mode="HTML")
 dp = Dispatcher()
-
 user_game = {}
+
+# ---------- HTTP SERVER (ДЛЯ RENDER) ----------
+
+async def healthcheck(request):
+    return web.Response(text="OK")
+
+async def start_webserver():
+    app = web.Application()
+    app.router.add_get("/", healthcheck)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
 
 # ---------- КЛАВИАТУРЫ ----------
 
@@ -55,133 +67,78 @@ async def team_history(game, team_id):
 def winrate(matches, team_id):
     if not matches:
         return 50
-    wins = 0
-    for m in matches:
-        w = m.get("winner")
-        if w and w.get("id") == team_id:
-            wins += 1
+    wins = sum(1 for m in matches if m.get("winner") and m["winner"]["id"] == team_id)
     return int(wins / len(matches) * 100)
 
 # ---------- START ----------
 
 @dp.message(Command("start"))
 async def start(msg: types.Message):
-    await msg.answer(
-        "👋 <b>Esport Bot</b>\n\nВыбери игру:",
-        reply_markup=game_kb
-    )
+    await msg.answer("👋 <b>Esport Bot</b>\n\nВыбери игру:", reply_markup=game_kb)
 
-# ---------- ВЫБОР ИГРЫ ----------
+# ---------- CALLBACKS ----------
 
 @dp.callback_query(F.data.startswith("game_"))
 async def choose_game(call: types.CallbackQuery):
-    game = call.data.replace("game_", "")
-    user_game[call.from_user.id] = game
-
-    await call.message.edit_text(
-        f"✅ Игра выбрана: <b>{game.upper()}</b>",
-        reply_markup=menu_kb
-    )
+    user_game[call.from_user.id] = call.data.replace("game_", "")
+    await call.message.edit_text("✅ Игра выбрана", reply_markup=menu_kb)
     await call.answer()
-
-# ---------- МАТЧИ ----------
 
 @dp.callback_query(F.data == "matches")
 async def matches(call: types.CallbackQuery):
     game = user_game.get(call.from_user.id)
     if not game:
-        return await call.answer("Сначала выбери игру", show_alert=True)
+        return await call.answer("Выбери игру", show_alert=True)
 
-    data = await upcoming_matches(game)
-    if not data:
-        return await call.message.answer("Матчей нет 😕")
-
-    for m in data:
+    for m in await upcoming_matches(game):
         opp = m.get("opponents", [])
         if len(opp) < 2:
             continue
-
-        t1 = opp[0]["opponent"]["name"]
-        t2 = opp[1]["opponent"]["name"]
-        tour = m.get("tournament", {}).get("name", "—")
-        time = m.get("begin_at")
-
-        text = (
-            f"🆚 <b>{t1} vs {t2}</b>\n"
-            f"🏆 {tour}\n"
-            f"🕒 {time}\n"
-            f"──────────────"
+        await call.message.answer(
+            f"🆚 <b>{opp[0]['opponent']['name']} vs {opp[1]['opponent']['name']}</b>\n"
+            f"🏆 {m.get('tournament', {}).get('name','—')}"
         )
-        await call.message.answer(text)
-
     await call.answer()
-
-# ---------- АНАЛИТИКА ----------
 
 @dp.callback_query(F.data == "analytics")
 async def analytics(call: types.CallbackQuery):
     game = user_game.get(call.from_user.id)
     if not game:
-        return await call.answer("Сначала выбери игру", show_alert=True)
+        return await call.answer("Выбери игру", show_alert=True)
 
-    matches = await upcoming_matches(game)
-    if not matches:
-        return await call.message.answer("Нет данных")
-
-    team = matches[0]["opponents"][0]["opponent"]
-    history = await team_history(game, team["id"])
-    wr = winrate(history, team["id"])
+    m = (await upcoming_matches(game))[0]
+    team = m["opponents"][0]["opponent"]
+    wr = winrate(await team_history(game, team["id"]), team["id"])
 
     bars = "🟩" * (wr // 10) + "🟥" * (10 - wr // 10)
-
     await call.message.answer(
-        f"📊 <b>Аналитика</b>\n\n"
-        f"Команда: <b>{team['name']}</b>\n"
-        f"Винрейт: <b>{wr}%</b>\n"
-        f"{bars}"
+        f"📊 <b>{team['name']}</b>\nВинрейт: {wr}%\n{bars}"
     )
     await call.answer()
-
-# ---------- ЭКСПРЕСС ----------
 
 @dp.callback_query(F.data == "express")
 async def express(call: types.CallbackQuery):
     game = user_game.get(call.from_user.id)
     if not game:
-        return await call.answer("Сначала выбери игру", show_alert=True)
+        return await call.answer("Выбери игру", show_alert=True)
 
-    matches = await upcoming_matches(game)
-    if not matches:
-        return await call.message.answer("Нет матчей")
-
-    text = "🎯 <b>Экспресс-прогноз</b>\n──────────────\n"
-    i = 1
-
-    for m in matches:
+    text = "🎯 <b>Экспресс</b>\n"
+    for m in await upcoming_matches(game):
         opp = m.get("opponents", [])
         if len(opp) < 2:
             continue
-
         t1, t2 = opp[0]["opponent"], opp[1]["opponent"]
         wr1 = winrate(await team_history(game, t1["id"]), t1["id"])
         wr2 = winrate(await team_history(game, t2["id"]), t2["id"])
-
         fav = t1["name"] if wr1 >= wr2 else t2["name"]
-
-        text += (
-            f"{i}️⃣ <b>{t1['name']} vs {t2['name']}</b>\n"
-            f"⭐ Прогноз: <b>{fav}</b>\n"
-            f"📊 {wr1}% / {wr2}%\n"
-            f"──────────────\n"
-        )
-        i += 1
-
+        text += f"\n<b>{t1['name']} vs {t2['name']}</b>\nПрогноз: {fav}"
     await call.message.answer(text)
     await call.answer()
 
 # ---------- RUN ----------
 
 async def main():
+    await start_webserver()      # 👈 ВАЖНО
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
