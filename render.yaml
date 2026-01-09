@@ -1,8 +1,14 @@
 services:
   - type: web
-    name: telegram-esport-bot
-    env: docker
+    name: telegram-esports-bot
+    env: python
     plan: free
+
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+
     envVars:
       - key: BOT_TOKEN
+        sync: false
+      - key: PANDASCORE_TOKEN
         sync: false

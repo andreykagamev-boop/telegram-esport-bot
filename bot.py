@@ -1,6 +1,8 @@
 import os
 import asyncio
 import aiohttp
+from aiohttp import web
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message,
@@ -13,6 +15,7 @@ from aiogram.router import Router
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PANDASCORE_TOKEN = os.getenv("PANDASCORE_TOKEN")
+PORT = int(os.getenv("PORT", 10000))  # Render требует порт
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
@@ -62,8 +65,7 @@ async def upcoming_matches(game: str) -> list:
 @router.message(CommandStart())
 async def start(msg: Message):
     await msg.answer(
-        "👋 Привет! Я eSports бот\n\n"
-        "Выбери игру:",
+        "👋 Привет! Я eSports бот\n\nВыбери игру:",
         reply_markup=main_kb()
     )
 
@@ -72,7 +74,7 @@ async def choose_game(call: CallbackQuery):
     await call.answer()
     game = call.data.split("_")[1]
     await call.message.answer(
-        f"🎯 Выбрана игра: {game.upper()}",
+        f"🎯 {game.upper()}",
         reply_markup=game_kb(game)
     )
 
@@ -89,9 +91,8 @@ async def matches(call: CallbackQuery):
     text = "📅 Ближайшие матчи:\n\n"
     for m in matches:
         opp = m.get("opponents", [])
-        if len(opp) < 2:
-            continue
-        text += f"🏆 {opp[0]['opponent']['name']} vs {opp[1]['opponent']['name']}\n"
+        if len(opp) >= 2:
+            text += f"🏆 {opp[0]['opponent']['name']} vs {opp[1]['opponent']['name']}\n"
 
     await call.message.answer(text)
 
@@ -102,23 +103,20 @@ async def analytics(call: CallbackQuery):
     matches = await upcoming_matches(game)
 
     if not matches:
-        await call.message.answer("❌ Нет данных для аналитики")
+        await call.message.answer("❌ Нет данных")
         return
 
     m = matches[0]
     opp = m.get("opponents", [])
     if len(opp) < 2:
-        await call.message.answer("❌ Недостаточно информации")
+        await call.message.answer("❌ Недостаточно данных")
         return
 
-    t1 = opp[0]['opponent']['name']
-    t2 = opp[1]['opponent']['name']
-
     await call.message.answer(
-        f"📊 Аналитика матча\n\n"
-        f"🏆 {t1} vs {t2}\n\n"
-        f"🔍 Учитывается форма, стабильность, карты\n"
-        f"⚠️ Прогноз не гарантирует исход"
+        f"📊 Аналитика\n\n"
+        f"{opp[0]['opponent']['name']} vs {opp[1]['opponent']['name']}\n\n"
+        f"📈 Форма • 💥 Карты • 🧠 Стабильность\n"
+        f"⚠️ Не является финансовой рекомендацией"
     )
 
 @router.callback_query(F.data.startswith("express_"))
@@ -127,28 +125,32 @@ async def express(call: CallbackQuery):
     game = call.data.split("_")[1]
     matches = await upcoming_matches(game)
 
-    if not matches:
-        await call.message.answer("❌ Нет матчей для экспресса")
-        return
-
     picks = []
     for m in matches[:3]:
         opp = m.get("opponents", [])
-        if len(opp) < 2:
-            continue
-        picks.append(f"✅ Победа {opp[0]['opponent']['name']}")
+        if len(opp) >= 2:
+            picks.append(f"✅ {opp[0]['opponent']['name']}")
 
     if not picks:
-        await call.message.answer("❌ Не удалось собрать экспресс")
+        await call.message.answer("❌ Экспресс недоступен")
         return
 
-    await call.message.answer(
-        "🔥 Экспресс прогноз:\n\n" + "\n".join(picks)
-    )
+    await call.message.answer("🔥 Экспресс:\n\n" + "\n".join(picks))
 
-# ---------- RUN ----------
+# ---------- WEB SERVER (Render hack) ----------
+
+async def handle(request):
+    return web.Response(text="Bot is running")
 
 async def main():
+    app = web.Application()
+    app.router.add_get("/", handle)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
